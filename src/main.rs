@@ -45,6 +45,7 @@ fn get_cookie() -> Result<String, Box<dyn Error>> {
     Ok(cookie)
 }
 
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::builder()
@@ -60,7 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     io::stdin().read_line(&mut user_id)?;
     let user_id = user_id.trim();
 
-    fs::create_dir_all("downloads")?;
+    let download_dir = format!("download/{}",user_id);
+    fs::create_dir_all(&download_dir)?;
 
     let all_artwork_ids = get_all_artwork_ids(&client, &cookie, user_id).await?;
     println!("Total artworks found: {}", all_artwork_ids.len());
@@ -68,15 +70,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let semaphore = Arc::new(Semaphore::new(5));
     let client = Arc::new(client);
     let cookie = Arc::new(cookie);
+    let user_id = Arc::new(user_id.to_string());
 
     let results = stream::iter(all_artwork_ids)
         .map(|id| {
             let client = Arc::clone(&client);
             let cookie = Arc::clone(&cookie);
             let semaphore = Arc::clone(&semaphore);
+            let user_id = Arc::clone(&user_id);
             async move {
                 let _permit = semaphore.acquire().await.unwrap();
-                let result = download_artwork(&client, &cookie, &id).await;
+                let result = download_artwork(&client, &cookie, &id, &user_id).await;
                 if let Err(ref e) = result {
                     eprintln!("Failed to download artwork {}: {}", id, e);
                 }
@@ -124,7 +128,7 @@ async fn get_all_artwork_ids(client: &Client, cookie: &str, user_id: &str) -> Re
     Ok(artwork_ids)
 }
 
-async fn download_artwork(client: &Client, cookie: &str, artwork_id: &str) -> Result<(), Box<dyn Error>> {
+async fn download_artwork(client: &Client, cookie: &str, artwork_id: &str, user_id: &Arc<String>) -> Result<(), Box<dyn Error>> {
     let mut retry_delay = 1;
     let max_retries = 5;
 
@@ -157,7 +161,8 @@ async fn download_artwork(client: &Client, cookie: &str, artwork_id: &str) -> Re
         let is_r18 = json["body"]["xRestrict"].as_i64().unwrap_or(0) == 1;
 
         let folder_name = if is_r18 { "R18" } else { "All" };
-        fs::create_dir_all(format!("downloads/{}", folder_name))?;
+        let user_folder = format!("download/{}/{}", user_id, folder_name);
+        fs::create_dir_all(&user_folder)?;
 
         for page in 0..page_count {
             let url = if page_count > 1 {
@@ -167,7 +172,7 @@ async fn download_artwork(client: &Client, cookie: &str, artwork_id: &str) -> Re
             };
 
             let filename = Path::new(&url).file_name().unwrap().to_str().unwrap();
-            let file_path = format!("downloads/{}/{}_{}", folder_name, title, filename);
+            let file_path = format!("{}/{}_{}", user_folder, title, filename);
 
             if Path::new(&file_path).exists() {
                 println!("File already exists, skipping: {}", filename);
